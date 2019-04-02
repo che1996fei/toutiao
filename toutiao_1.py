@@ -4,6 +4,14 @@ import requests
 from requests.exceptions import RequestException
 import json
 import re
+from config import *
+import pymongo
+import os
+from hashlib import md5
+from multiprocessing import Pool
+
+client = pymongo.MongoClient(MONGO_URL, connect=False)
+db = client[MONGO_DB]
 
 
 
@@ -46,9 +54,9 @@ def get_page_detail(url):
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             return response.text
-        return None
+        return url
     except RequestException:
-        return 0
+        return None
 
 def parse_page_detail(html, url):
     soup = BeautifulSoup(html, 'lxml')
@@ -61,20 +69,52 @@ def parse_page_detail(html, url):
         if data and 'sub_images' in data.keys():
             sub_images = data.get('sub_images')
             images = [item.get('url') for item in sub_images]
+            for image in images:download_image(image)
             return {
-                'title': title,
-                'url': url,
-                'images': images
-            }
+                        'title': title,
+                        'url': url,
+                        'images': images
+                        }
 
-def main():
-    html = get_page_index(0, '街拍图集')
+
+def save_to_mongo(result):
+    if (result != None) and (db[MONGO_TABLE].insert_one(result)):
+        print('存储成功', result)
+        return True
+    return False
+
+def download_image(url):
+    print('正在下载', url)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/73.0.3683.86 Safari/537.36'}
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            save_image(response.content)
+        return None
+    except RequestException:
+        print('请求图片出错', url)
+        return None
+
+def save_image(content):
+    file_path = '{0}/{1}.{2}'.format(os.getcwd(), md5(content).hexdigest(), 'jpg')
+    if not os.path.exists(file_path):
+        with open(file_path, 'wb') as f:
+            f.write(content)
+            f.close()
+
+
+def main(offset):
+    html = get_page_index(offset, keyword)
     for url in parse_page_index(html):
         html = get_page_detail(url)
         if html:
             result = parse_page_detail(html, url)
-            print(result)
+            if result:
+                save_to_mongo(result)
 
 
 if __name__ == '__main__':
-    main()
+    groups = [x*20 for x in range(GROUP_START, GROUP_END + 1)]
+    pool = Pool()
+    pool.map(main, groups)
